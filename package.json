@@ -1,5 +1,6 @@
 {
   "name": "shacl-generator",
+  "homepage": "https://jonathanvajda.github.io/shacl-generator",
   "private": true,
   "version": "0.0.0",
   "type": "module",
