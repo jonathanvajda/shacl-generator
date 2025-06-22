@@ -1,4 +1,4 @@
-// Updated SHACL Generator with label lookup, customizable cardinalities, and validation comments
+// Enhanced SHACL Generator with target shape options, regex, separate messages, and more
 
 import { useState, useEffect } from "react"
 import { Parser, Store, DataFactory, Writer } from "n3"
@@ -11,9 +11,11 @@ export default function ShaclGenerator() {
   const [properties, setProperties] = useState([])
   const [selectedProps, setSelectedProps] = useState([])
   const [shaclOutput, setShaclOutput] = useState("")
+  const [globalShape, setGlobalShape] = useState(false)
 
   const [cardinalities, setCardinalities] = useState({})
-  const [comments, setComments] = useState({})
+  const [messages, setMessages] = useState({})
+  const [patterns, setPatterns] = useState({})
   const [labels, setLabels] = useState({})
 
   const parseOntology = () => {
@@ -47,23 +49,42 @@ export default function ShaclGenerator() {
   const generateSHACL = () => {
     const writer = new Writer({ prefixes: { sh: "http://www.w3.org/ns/shacl#", ex: "http://example.org/" } })
     const shapeName = `ex:${selectedClass.split(/[#/]/).pop()}Shape`
-    writer.addQuad(DataFactory.namedNode(shapeName), DataFactory.namedNode("http://www.w3.org/ns/shacl#targetClass"), DataFactory.namedNode(selectedClass))
+
+    if (!globalShape) {
+      writer.addQuad(DataFactory.namedNode(shapeName), DataFactory.namedNode("http://www.w3.org/ns/shacl#targetClass"), DataFactory.namedNode(selectedClass))
+    }
 
     selectedProps.forEach(prop => {
       const b = DataFactory.blankNode()
-      writer.addQuad(DataFactory.namedNode(shapeName), DataFactory.namedNode("http://www.w3.org/ns/shacl#property"), b)
-      writer.addQuad(b, DataFactory.namedNode("http://www.w3.org/ns/shacl#path"), DataFactory.namedNode(prop))
+      const shapeNode = DataFactory.namedNode(shapeName)
+      if (globalShape) {
+        writer.addQuad(shapeNode, DataFactory.namedNode("http://www.w3.org/1999/02/22-rdf-syntax-ns#type"), DataFactory.namedNode("http://www.w3.org/ns/shacl#PropertyShape"))
+        writer.addQuad(shapeNode, DataFactory.namedNode("http://www.w3.org/ns/shacl#targetSubjectsOf"), DataFactory.namedNode(prop))
+        writer.addQuad(shapeNode, DataFactory.namedNode("http://www.w3.org/ns/shacl#path"), DataFactory.namedNode(prop))
+      } else {
+        writer.addQuad(shapeNode, DataFactory.namedNode("http://www.w3.org/ns/shacl#property"), b)
+        writer.addQuad(b, DataFactory.namedNode("http://www.w3.org/ns/shacl#path"), DataFactory.namedNode(prop))
+      }
 
-      const card = cardinalities[prop] || { min: "0", max: "" }
+      const target = globalShape ? shapeNode : b
+      const card = cardinalities[prop] || { min: "", max: "" }
+      const msg = messages[prop] || { min: "", max: "" }
+      const regex = patterns[prop] || ""
+
       if (card.min) {
-        writer.addQuad(b, DataFactory.namedNode("http://www.w3.org/ns/shacl#minCount"), DataFactory.literal(card.min, DataFactory.namedNode("http://www.w3.org/2001/XMLSchema#integer")))
+        writer.addQuad(target, DataFactory.namedNode("http://www.w3.org/ns/shacl#minCount"), DataFactory.literal(card.min, DataFactory.namedNode("http://www.w3.org/2001/XMLSchema#integer")))
+        if (msg.min) {
+          writer.addQuad(target, DataFactory.namedNode("http://www.w3.org/ns/shacl#message"), DataFactory.literal(msg.min))
+        }
       }
       if (card.max) {
-        writer.addQuad(b, DataFactory.namedNode("http://www.w3.org/ns/shacl#maxCount"), DataFactory.literal(card.max, DataFactory.namedNode("http://www.w3.org/2001/XMLSchema#integer")))
+        writer.addQuad(target, DataFactory.namedNode("http://www.w3.org/ns/shacl#maxCount"), DataFactory.literal(card.max, DataFactory.namedNode("http://www.w3.org/2001/XMLSchema#integer")))
+        if (msg.max) {
+          writer.addQuad(target, DataFactory.namedNode("http://www.w3.org/ns/shacl#message"), DataFactory.literal(msg.max))
+        }
       }
-
-      if (comments[prop]) {
-        writer.addQuad(b, DataFactory.namedNode("http://www.w3.org/ns/shacl#message"), DataFactory.literal(comments[prop]))
+      if (regex) {
+        writer.addQuad(target, DataFactory.namedNode("http://www.w3.org/ns/shacl#pattern"), DataFactory.literal(regex))
       }
     })
 
@@ -89,8 +110,18 @@ export default function ShaclGenerator() {
     }))
   }
 
-  const updateComment = (prop, value) => {
-    setComments(prev => ({ ...prev, [prop]: value }))
+  const updateMessage = (prop, type, value) => {
+    setMessages(prev => ({
+      ...prev,
+      [prop]: {
+        ...prev[prop],
+        [type]: value
+      }
+    }))
+  }
+
+  const updatePattern = (prop, value) => {
+    setPatterns(prev => ({ ...prev, [prop]: value }))
   }
 
   const downloadTTL = () => {
@@ -107,15 +138,24 @@ export default function ShaclGenerator() {
       <input type="file" accept=".ttl" onChange={handleFileUpload} />
       <button onClick={parseOntology}>Parse Ontology</button>
 
-      <h2 style={{ marginTop: "1rem" }}>Select Class</h2>
-      <select value={selectedClass} onChange={e => setSelectedClass(e.target.value)}>
-        <option value="">-- Select --</option>
-        {classes.map(c => (
-          <option key={c} value={c}>
-            {labels[c] ? `${c} (${labels[c]})` : c}
-          </option>
-        ))}
-      </select>
+      <label>
+        <input type="checkbox" checked={globalShape} onChange={() => setGlobalShape(!globalShape)} />
+        Use global property shape (sh:targetSubjectsOf)
+      </label>
+
+      {!globalShape && (
+        <>
+          <h2 style={{ marginTop: "1rem" }}>Select Class</h2>
+          <select value={selectedClass} onChange={e => setSelectedClass(e.target.value)}>
+            <option value="">-- Select --</option>
+            {classes.map(c => (
+              <option key={c} value={c}>
+                {labels[c] ? `${c} (${labels[c]})` : c}
+              </option>
+            ))}
+          </select>
+        </>
+      )}
 
       <h2 style={{ marginTop: "1rem" }}>Select Properties</h2>
       <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
@@ -127,10 +167,24 @@ export default function ShaclGenerator() {
             </label>
             {selectedProps.includes(p) && (
               <div style={{ marginTop: "0.5rem" }}>
-                <label>minCount: <input type="number" value={cardinalities[p]?.min || ""} onChange={e => updateCardinality(p, "min", e.target.value)} /></label>
-                <label style={{ marginLeft: "1rem" }}>maxCount: <input type="number" value={cardinalities[p]?.max || ""} onChange={e => updateCardinality(p, "max", e.target.value)} /></label>
+                <label>minCount:
+                  <input type="number" value={cardinalities[p]?.min || ""} onChange={e => updateCardinality(p, "min", e.target.value)} />
+                </label>
+                <label style={{ marginLeft: "1rem" }}>maxCount:
+                  <input type="number" value={cardinalities[p]?.max || ""} onChange={e => updateCardinality(p, "max", e.target.value)} />
+                </label>
                 <br />
-                <label>Validation message: <input type="text" value={comments[p] || ""} onChange={e => updateComment(p, e.target.value)} style={{ width: "60%" }} /></label>
+                <label>Min message:
+                  <input type="text" value={messages[p]?.min || ""} onChange={e => updateMessage(p, "min", e.target.value)} style={{ width: "60%" }} />
+                </label>
+                <br />
+                <label>Max message:
+                  <input type="text" value={messages[p]?.max || ""} onChange={e => updateMessage(p, "max", e.target.value)} style={{ width: "60%" }} />
+                </label>
+                <br />
+                <label>Regex pattern:
+                  <input type="text" value={patterns[p] || ""} onChange={e => updatePattern(p, e.target.value)} style={{ width: "60%" }} />
+                </label>
               </div>
             )}
           </div>
@@ -138,7 +192,9 @@ export default function ShaclGenerator() {
       </div>
 
       <div style={{ marginTop: "1rem" }}>
-        <button onClick={generateSHACL} disabled={!selectedClass || selectedProps.length === 0}>Generate SHACL</button>
+        <button onClick={generateSHACL} disabled={selectedProps.length === 0 || (!globalShape && !selectedClass)}>
+          Generate SHACL
+        </button>
       </div>
 
       <h2 style={{ marginTop: "1rem" }}>SHACL Turtle Output</h2>
@@ -149,4 +205,4 @@ export default function ShaclGenerator() {
       </div>
     </div>
   )
-} 
+}
